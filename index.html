@@ -471,7 +471,7 @@ async function scanCode(img){
     }catch(e){}
   }
 
-  // 6) Final whole-image downscale. Some barcodes decode better after a little
+  // 6) Whole-image downscale. Some barcodes decode better after a little
   // resampling/binarisation even when no crop is appropriate.
   if(img.naturalWidth > 1600){
     try{
@@ -483,6 +483,99 @@ async function scanCode(img){
       if(hit) return hit;
     }catch(e){}
   }
+
+  // 7) LAST RESORT: true full-resolution, lossless scan.
+  // Earlier fallbacks intentionally trade resolution for speed and several
+  // canvas helpers convert through JPEG. A small Code 128 can lose just enough
+  // edge definition for that to matter. This pass preserves every source pixel
+  // and is only reached for photos that all quicker checks failed to decode.
+  try{
+    const full = document.createElement('canvas');
+    full.width = img.naturalWidth;
+    full.height = img.naturalHeight;
+    const fctx = full.getContext('2d', {willReadFrequently:true});
+    fctx.imageSmoothingEnabled = false;
+    fctx.drawImage(img, 0, 0);
+
+    // BarcodeDetector accepts CanvasImageSource directly in supporting browsers.
+    if(nativeBarcodeDetector){
+      try{
+        const hits = await nativeBarcodeDetector.detect(full);
+        if(hits && hits.length){
+          const h = hits[0];
+          if(h.rawValue) return {text:h.rawValue, kind:(h.format || 'BARCODE').toUpperCase()};
+        }
+      }catch(e){}
+    }
+
+    // ZXing can decode a canvas directly in current builds; avoiding an
+    // intermediate JPEG/data URL is important for very narrow barcode bars.
+    if(zxingReader && typeof zxingReader.decodeFromCanvas === 'function'){
+      try{
+        const result = await zxingReader.decodeFromCanvas(full);
+        if(result && result.getText()){
+          const fmt = result.getBarcodeFormat !== undefined ? result.getBarcodeFormat() : null;
+          const kind = (fmt !== null && ZXing.BarcodeFormat)
+            ? (Object.keys(ZXing.BarcodeFormat).find(k => ZXing.BarcodeFormat[k] === fmt) || 'BARCODE')
+            : 'BARCODE';
+          return {text:result.getText(), kind};
+        }
+      }catch(e){}
+    }
+
+    // Fallback for ZXing builds without decodeFromCanvas: convert losslessly
+    // to PNG, not JPEG, then run the normal image decoder.
+    try{
+      const lossless = await new Promise((resolve, reject) => {
+        const im = new Image();
+        im.onload = () => resolve(im);
+        im.onerror = reject;
+        im.src = full.toDataURL('image/png');
+      });
+      hit = await zxingDecode(lossless);
+      if(hit) return hit;
+    }catch(e){}
+
+    // Finally rotate the ORIGINAL full-resolution pixels one orientation at a
+    // time. Canvases are discarded between attempts to limit peak memory use.
+    for(const deg of [90, 180, 270]){
+      try{
+        const swap = (deg % 180) !== 0;
+        const rc = document.createElement('canvas');
+        rc.width = swap ? full.height : full.width;
+        rc.height = swap ? full.width : full.height;
+        const rctx = rc.getContext('2d');
+        rctx.imageSmoothingEnabled = false;
+        rctx.translate(rc.width/2, rc.height/2);
+        rctx.rotate(deg * Math.PI / 180);
+        rctx.drawImage(full, -full.width/2, -full.height/2);
+
+        if(nativeBarcodeDetector){
+          try{
+            const hits = await nativeBarcodeDetector.detect(rc);
+            if(hits && hits.length){
+              const h = hits[0];
+              if(h.rawValue) return {text:h.rawValue, kind:(h.format || 'BARCODE').toUpperCase()};
+            }
+          }catch(e){}
+        }
+
+        if(zxingReader && typeof zxingReader.decodeFromCanvas === 'function'){
+          try{
+            const result = await zxingReader.decodeFromCanvas(rc);
+            if(result && result.getText()){
+              const fmt = result.getBarcodeFormat !== undefined ? result.getBarcodeFormat() : null;
+              const kind = (fmt !== null && ZXing.BarcodeFormat)
+                ? (Object.keys(ZXing.BarcodeFormat).find(k => ZXing.BarcodeFormat[k] === fmt) || 'BARCODE')
+                : 'BARCODE';
+              return {text:result.getText(), kind};
+            }
+          }catch(e){}
+        }
+      }catch(e){}
+    }
+  }catch(e){}
+
   return null;
 }
 
