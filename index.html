@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>QR &amp; Barcode Photo Renamer</title>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.12.1/dist/quagga.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <style>
@@ -234,17 +235,18 @@ window.addEventListener('unhandledrejection', e =>
 
 const missingLibs = [];
 if(typeof jsQR === 'undefined')  missingLibs.push('jsQR — QR decoding');
-if(typeof ZXing === 'undefined') missingLibs.push('ZXing — barcode decoding');
+if(typeof Quagga === 'undefined') missingLibs.push('Quagga2 — 1D barcode decoding');
+if(typeof ZXing === 'undefined') missingLibs.push('ZXing — fallback barcode decoding');
 if(typeof JSZip === 'undefined') missingLibs.push('JSZip — ZIP export');
 if(missingLibs.length){
   const w = document.getElementById('libWarning');
   w.style.display = 'block';
   w.innerHTML = '<b>⚠️ Libraries failed to load:</b> ' + missingLibs.join('; ') +
-    '. This page loads jsQR, ZXing and JSZip from a CDN, so it needs an internet ' +
+    '. This page loads jsQR, Quagga2, ZXing and JSZip from a CDN, so it needs an internet ' +
     'connection when opened. Features tied to a missing library will not work. ' +
     'Try a hard refresh (Ctrl+Shift+R).';
 }
-console.log('libs:', {jsQR: typeof jsQR, ZXing: typeof ZXing, JSZip: typeof JSZip});
+console.log('libs:', {jsQR: typeof jsQR, Quagga: typeof Quagga, ZXing: typeof ZXing, JSZip: typeof JSZip});
 
 document.getElementById('resetBtn').addEventListener('click', () => {
   if(document.getElementById('previewModal').classList.contains('open')) closePreview();
@@ -311,6 +313,55 @@ async function rotated(img, deg){
   return canvasToImage(c);
 }
 
+// Quagga2 is the primary 1D barcode decoder. It is much better at locating a
+// small Code 128 inside a larger photograph than a whole-frame ZXing pass.
+const quaggaReadersPrimary = ['code_128_reader'];
+const quaggaReadersAll = [
+  'code_128_reader','code_39_reader','code_39_vin_reader','code_93_reader',
+  'ean_reader','ean_8_reader','upc_reader','upc_e_reader','codabar_reader',
+  'i2of5_reader','2of5_reader','code_32_reader'
+];
+
+function quaggaDecodeWithReaders(img, readers, opts={}){
+  if(typeof Quagga === 'undefined' || !img || !img.src) return Promise.resolve(null);
+  const size = opts.size === undefined ? 1600 : opts.size;
+  const locate = opts.locate === undefined ? true : opts.locate;
+  const patchSize = opts.patchSize || 'medium';
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = value => { if(!settled){ settled = true; resolve(value); } };
+    try{
+      Quagga.decodeSingle({
+        src: img.src,
+        numOfWorkers: 0, // most reliable for local-file Safari/iPad use
+        locate,
+        inputStream: { size }, // size:0 means original/full resolution
+        locator: { patchSize, halfSample: false },
+        decoder: { readers, multiple: false }
+      }, result => {
+        try{
+          const cr = result && result.codeResult;
+          if(cr && cr.code){
+            const format = String(cr.format || 'BARCODE').replace(/_reader$/i,'').toUpperCase();
+            finish({text:String(cr.code), kind:format});
+          } else finish(null);
+        }catch(e){ finish(null); }
+      });
+      // A corrupt image/library failure should never stall the whole batch.
+      setTimeout(() => finish(null), opts.timeout || 12000);
+    }catch(e){ finish(null); }
+  });
+}
+
+async function quaggaDecode(img, opts={}){
+  // Code 128 first: it is the expected/most common format here, and limiting
+  // the first pass reduces both work and false positives.
+  let hit = await quaggaDecodeWithReaders(img, quaggaReadersPrimary, opts);
+  if(hit) return hit;
+  if(opts.code128Only) return null;
+  return quaggaDecodeWithReaders(img, quaggaReadersAll, opts);
+}
+
 async function zxingDecode(img){
   if(!zxingReader) return null;
   try{
@@ -352,8 +403,10 @@ async function nativeDecode(img){
   return null;
 }
 
-async function decodeAny(img){
+async function decodeAny(img, quaggaOpts={}){
   let hit = await nativeDecode(img);
+  if(hit && hit.text) return hit;
+  hit = await quaggaDecode(img, quaggaOpts);
   if(hit && hit.text) return hit;
   return zxingDecode(img);
 }
@@ -406,7 +459,7 @@ async function scanCode(img){
     if(code && code.data) return {text: code.data, kind: 'QR_CODE'};
   } catch(e){}
 
-  if(!zxingReader && !nativeBarcodeDetector) return null;
+  if(typeof Quagga === 'undefined' && !zxingReader && !nativeBarcodeDetector) return null;
 
   // 2) whole image, using native detector as well as ZXing where possible.
   let hit = await decodeAny(img);
@@ -453,7 +506,7 @@ async function scanCode(img){
   for(const r of regions){
     try{
       const crop = await scanCrop(img, r[0], r[1], r[2], r[3], false);
-      hit = await decodeAny(crop);
+      hit = await decodeAny(crop, {size:0, patchSize:'medium'});
       if(hit) return hit;
     }catch(e){}
   }
@@ -463,10 +516,10 @@ async function scanCode(img){
   for(const r of regions.slice(0,9)){
     try{
       const crop = await scanCrop(img, r[0], r[1], r[2], r[3], true);
-      hit = await decodeAny(crop);
+      hit = await decodeAny(crop, {size:0, patchSize:'medium'});
       if(hit) return hit;
       // A 90-degree pass helps vertical/sideways 1D codes in a crop.
-      hit = await decodeAny(await rotated(crop, 90));
+      hit = await decodeAny(await rotated(crop, 90), {size:0, patchSize:'medium'});
       if(hit) return hit;
     }catch(e){}
   }
@@ -490,6 +543,15 @@ async function scanCode(img){
   // edge definition for that to matter. This pass preserves every source pixel
   // and is only reached for photos that all quicker checks failed to decode.
   try{
+    // Quagga2's decodeSingle normally rescales static images. size:0 explicitly
+    // disables that behaviour so this really is an original-resolution pass.
+    // First let its locator search the whole photograph, then retry without the
+    // locator (useful when a barcode is already prominent in the scan line).
+    hit = await quaggaDecode(img, {size:0, locate:true, patchSize:'large', timeout:18000});
+    if(hit) return hit;
+    hit = await quaggaDecode(img, {size:0, locate:false, patchSize:'large', timeout:18000});
+    if(hit) return hit;
+
     const full = document.createElement('canvas');
     full.width = img.naturalWidth;
     full.height = img.naturalHeight;
@@ -557,6 +619,19 @@ async function scanCode(img){
               const h = hits[0];
               if(h.rawValue) return {text:h.rawValue, kind:(h.format || 'BARCODE').toUpperCase()};
             }
+          }catch(e){}
+        }
+
+        if(typeof Quagga !== 'undefined'){
+          try{
+            const rim = await new Promise((resolve, reject) => {
+              const im = new Image();
+              im.onload = () => resolve(im);
+              im.onerror = reject;
+              im.src = rc.toDataURL('image/png');
+            });
+            hit = await quaggaDecode(rim, {size:0, locate:true, patchSize:'large', timeout:18000});
+            if(hit) return hit;
           }catch(e){}
         }
 
