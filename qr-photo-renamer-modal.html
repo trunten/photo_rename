@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QR &amp; Barcode Photo Renamer</title>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+  :root{
+    --bg:#0f172a; --card:#1e293b; --accent:#38bdf8; --ok:#22c55e;
+    --warn:#f59e0b; --err:#ef4444; --text:#e2e8f0; --muted:#94a3b8;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg); color:var(--text); min-height:100vh; padding:2rem 1rem;
+  }
+  .container{max-width:860px; margin:0 auto;}
+  h1{font-size:1.6rem; margin-bottom:.25rem;}
+  .subtitle{color:var(--muted); margin-bottom:1.5rem; font-size:.95rem;}
+  .card{background:var(--card); border-radius:12px; padding:1.25rem; margin-bottom:1.25rem;}
+  .dropzone{
+    border:2px dashed var(--accent); border-radius:12px; padding:2.5rem 1rem;
+    text-align:center; cursor:pointer; transition:background .2s;
+  }
+  .dropzone:hover, .dropzone.dragover{background:rgba(56,189,248,.08);}
+  .dropzone p{color:var(--muted); margin-top:.5rem; font-size:.9rem;}
+  .dropzone .big{font-size:1.1rem; color:var(--text);}
+  .row{display:flex; gap:1rem; flex-wrap:wrap; align-items:center; margin-bottom:1rem;}
+  .field{display:flex; align-items:center; gap:.5rem; font-size:.9rem; color:var(--muted);}
+  input[type=range]{accent-color:var(--accent);}
+  select, input[type=number]{
+    background:#0f172a; color:var(--text); border:1px solid #334155;
+    border-radius:6px; padding:.35rem .5rem; font-size:.9rem;
+  }
+  button{
+    background:var(--accent); color:#082f49; border:none; border-radius:8px;
+    padding:.6rem 1.2rem; font-size:.95rem; font-weight:600; cursor:pointer;
+  }
+  button:disabled{opacity:.4; cursor:not-allowed;}
+  button.secondary{background:#334155; color:var(--text);}
+  #progressWrap{display:none; margin-top:1rem;}
+  progress{width:100%; height:10px; accent-color:var(--ok);}
+  #progressText{font-size:.85rem; color:var(--muted); margin-top:.35rem;}
+  table{width:100%; border-collapse:collapse; font-size:.85rem;}
+  th, td{padding:.5rem .6rem; text-align:left; border-bottom:1px solid #334155;}
+  th{color:var(--muted); font-weight:600;}
+  .badge{padding:.15rem .5rem; border-radius:999px; font-size:.75rem; font-weight:600; white-space:nowrap;}
+  .b-ok{background:rgba(34,197,94,.15); color:var(--ok);}
+  .b-warn{background:rgba(245,158,11,.15); color:var(--warn);}
+  .b-err{background:rgba(239,68,68,.15); color:var(--err);}
+  .thumb{width:44px; height:44px; object-fit:cover; border-radius:6px;}
+  .filename{font-family:ui-monospace,monospace; font-size:.8rem; word-break:break-all;}
+  .muted{color:var(--muted);}
+  #downloadArea{margin-top:1rem; display:none; text-align:center;}
+  #downloadArea button{font-size:1.05rem; padding:.8rem 2rem; background:var(--ok); color:#052e16;}
+  .stat{font-size:.85rem; color:var(--muted);}
+  /* review queue */
+  .review-row{
+    display:flex; align-items:center; gap:.9rem; padding:.6rem 0;
+    border-bottom:1px solid #334155;
+  }
+  .review-row:last-child{border-bottom:none;}
+  .review-row .thumb{width:64px; height:64px; flex-shrink:0;}
+  .review-meta{flex:1; min-width:0;}
+  .review-meta .orig{font-size:.78rem; color:var(--muted); word-break:break-all;}
+  .name-input{
+    width:100%; margin-top:.25rem; background:#0f172a; color:var(--text);
+    border:1px solid #334155; border-radius:6px; padding:.45rem .6rem;
+    font-family:ui-monospace,monospace; font-size:.85rem;
+  }
+  .name-input:focus{outline:none; border-color:var(--accent);}
+  .include-wrap{display:flex; align-items:center; gap:.35rem; font-size:.85rem; color:var(--muted); flex-shrink:0;}
+  #finalizeBtn{width:100%; margin-top:1rem; background:var(--ok); color:#052e16; font-size:1rem;}
+  #reviewHint{font-size:.85rem; color:var(--muted); margin-bottom:.75rem;}
+
+  /* review preview modal */
+  .thumb.review-thumb{cursor:pointer; transition:transform .15s ease, opacity .15s ease;}
+  .thumb.review-thumb:hover{transform:scale(1.04); opacity:.92;}
+  .preview-modal{
+    position:fixed; inset:0; z-index:1000; display:none; align-items:center; justify-content:center;
+    background:rgba(2,6,23,.82); padding:1rem;
+  }
+  .preview-modal.open{display:flex;}
+  .preview-dialog{
+    width:min(960px, 96vw); max-height:94vh; background:var(--card); border:1px solid #334155;
+    border-radius:14px; padding:1rem; display:flex; flex-direction:column; gap:.8rem; box-shadow:0 20px 60px rgba(0,0,0,.45);
+  }
+  .preview-head{display:flex; align-items:center; justify-content:space-between; gap:1rem;}
+  .preview-title{min-width:0; font-size:.9rem; color:var(--muted); word-break:break-all;}
+  .preview-close{background:#334155; color:var(--text); padding:.45rem .7rem; flex-shrink:0;}
+  .preview-stage{
+    display:flex; align-items:center; justify-content:center; min-height:200px; max-height:68vh;
+    background:#020617; border-radius:10px; overflow:auto; padding:.5rem;
+  }
+  .preview-stage img{max-width:100%; max-height:66vh; width:auto; height:auto; object-fit:contain; display:block;}
+  .preview-name-wrap{display:flex; flex-direction:column; gap:.35rem;}
+  .preview-name-wrap label{font-size:.82rem; color:var(--muted);}
+  #previewName{
+    width:100%; background:#0f172a; color:var(--text); border:1px solid #334155; border-radius:8px;
+    padding:.65rem .75rem; font-family:ui-monospace,monospace; font-size:.95rem;
+  }
+  #previewName:focus{outline:none; border-color:var(--accent);}
+  @media (max-width:600px){
+    .preview-dialog{width:100%; max-height:96vh; padding:.75rem;}
+    .preview-stage{max-height:62vh;}
+    .preview-stage img{max-height:60vh;}
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <div id="libWarning" class="card" style="display:none; border:1px solid var(--err); font-size:.9rem;"></div>
+  <div id="errBar" class="card" style="display:none; border:1px solid var(--err); background:rgba(239,68,68,.08); font-size:.85rem; font-family:ui-monospace,monospace;"></div>
+  <h1>📷 QR &amp; Barcode Photo Renamer</h1>
+  <p class="subtitle">Drop photos → scan for QR codes &amp; barcodes → compress → rename to code content → download as ZIP</p>
+
+  <div class="card">
+    <div class="dropzone" id="dropzone">
+      <div class="big">Drag &amp; drop photos here</div>
+      <p>or click to browse — JPG, PNG, WebP, HEIC* (multiple files supported)</p>
+      <input type="file" id="fileInput" accept="image/*" multiple hidden>
+    </div>
+
+    <div class="row" style="margin-top:1rem;">
+      <div class="field">
+        JPEG quality:
+        <input type="range" id="quality" min="10" max="95" value="75">
+        <span id="qualityVal">75%</span>
+      </div>
+      <div class="field">
+        Max width:
+        <input type="number" id="maxWidth" value="1920" min="100" max="8000" step="100" style="width:90px;"> px
+      </div>
+    </div>
+
+    <div style="display:flex; gap:.75rem; margin-top:1rem;">
+      <button id="processBtn" disabled style="flex:1; width:auto; margin-top:0;">🔍 Process <span id="count">0</span> photo(s)</button>
+      <button id="resetBtn" class="secondary" style="margin-top:0;">🗑 Clear</button>
+    </div>
+
+    <div id="progressWrap">
+      <progress id="progressBar" value="0" max="100"></progress>
+      <div id="progressText"></div>
+    </div>
+  </div>
+
+  <div class="card" id="resultsCard" style="display:none;">
+    <h2 style="font-size:1.05rem; margin-bottom:.75rem;">Results — code detected</h2>
+    <table>
+      <thead><tr><th></th><th>Original</th><th>New name</th><th>Size</th><th>Status</th></tr></thead>
+      <tbody id="resultsBody"></tbody>
+    </table>
+    <div class="stat" id="statsLine" style="margin-top:.75rem;"></div>
+  </div>
+
+  <div class="card" id="reviewCard" style="display:none;">
+    <h2 style="font-size:1.05rem; margin-bottom:.25rem;">Review — no code detected (<span id="reviewCount">0</span>)</h2>
+    <p id="reviewHint">Inspect each photo, fix the filename if you like, or uncheck to exclude it from the ZIP.</p>
+    <div id="reviewList"></div>
+    <button id="finalizeBtn"><span id="finalizeBtnText">✅ Build &amp; Download ZIP</span> (<span id="pendingCount">0</span><span id="finalizeSuffix"> to export</span>)</button>
+  </div>
+
+  <div class="card" id="downloadCard" style="display:none;">
+    <div id="downloadArea" style="display:block; text-align:center;">
+      <button id="downloadBtn">⬇️ Download ZIP (<span id="zipSize"></span>)</button>
+      <p class="muted" style="margin-top:.5rem; font-size:.85rem;" id="zipSummary"></p>
+    </div>
+  </div>
+</div>
+
+<div class="preview-modal" id="previewModal" aria-hidden="true">
+  <div class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+    <div class="preview-head">
+      <div class="preview-title" id="previewTitle"></div>
+      <button type="button" class="preview-close" id="previewClose" aria-label="Close preview">✕ Close</button>
+    </div>
+    <div class="preview-stage">
+      <img id="previewImage" alt="Review photo preview">
+    </div>
+    <div class="preview-name-wrap">
+      <label for="previewName">New filename</label>
+      <input id="previewName" type="text" autocomplete="off" spellcheck="false">
+    </div>
+  </div>
+</div>
+
+<script>
+const dropzone   = document.getElementById('dropzone');
+const fileInput  = document.getElementById('fileInput');
+const processBtn = document.getElementById('processBtn');
+const countSpan  = document.getElementById('count');
+const quality    = document.getElementById('quality');
+const qualityVal = document.getElementById('qualityVal');
+const maxWidth   = document.getElementById('maxWidth');
+
+// ZXing multi-format reader with TRY_HARDER enabled — handles 1D barcodes
+// (EAN-13, UPC-A/E, Code 128, Code 39, Code 93, ITF, Codabar, RSS) plus
+// DataMatrix and PDF417. QR is still routed through fast jsQR first.
+let zxingReader = null;
+if(typeof ZXing !== 'undefined'){
+  try{
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.DATA_MATRIX, ZXing.BarcodeFormat.PDF_417,
+      ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_A,
+      ZXing.BarcodeFormat.UPC_E, ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39,
+      ZXing.BarcodeFormat.CODE_93, ZXing.BarcodeFormat.ITF, ZXing.BarcodeFormat.CODABAR,
+      ZXing.BarcodeFormat.RSS_14, ZXing.BarcodeFormat.RSS_EXPANDED
+    ]);
+    zxingReader = new ZXing.BrowserMultiFormatReader(hints);
+  }catch(e){ console.warn('ZXing init failed', e); }
+}
+
+let files = [];          // dropped files
+let coded = [];          // {name, blob, origName}
+let review = [];         // {file, thumbUrl, origName}; thumbUrl is an object URL for reliable preview
+let zipBlob = null;
+let usedNames = new Set();
+
+// ---------- diagnostics ----------
+function showErr(msg){
+  const bar = document.getElementById('errBar');
+  bar.style.display = 'block';
+  bar.textContent = '⚠️ ' + msg;
+}
+window.addEventListener('error', e =>
+  showErr(e.message + ' (line ' + e.lineno + ')'));
+window.addEventListener('unhandledrejection', e =>
+  showErr('Async error: ' + ((e.reason && e.reason.message) || e.reason)));
+
+const missingLibs = [];
+if(typeof jsQR === 'undefined')  missingLibs.push('jsQR — QR decoding');
+if(typeof ZXing === 'undefined') missingLibs.push('ZXing — barcode decoding');
+if(typeof JSZip === 'undefined') missingLibs.push('JSZip — ZIP export');
+if(missingLibs.length){
+  const w = document.getElementById('libWarning');
+  w.style.display = 'block';
+  w.innerHTML = '<b>⚠️ Libraries failed to load:</b> ' + missingLibs.join('; ') +
+    '. This page loads jsQR, ZXing and JSZip from a CDN, so it needs an internet ' +
+    'connection when opened. Features tied to a missing library will not work. ' +
+    'Try a hard refresh (Ctrl+Shift+R).';
+}
+console.log('libs:', {jsQR: typeof jsQR, ZXing: typeof ZXing, JSZip: typeof JSZip});
+
+document.getElementById('resetBtn').addEventListener('click', () => {
+  if(document.getElementById('previewModal').classList.contains('open')) closePreview();
+  review.forEach(item => { if(item.thumbUrl) URL.revokeObjectURL(item.thumbUrl); });
+  files = []; coded = []; review = []; zipBlob = null; usedNames = new Set();
+  countSpan.textContent = '0';
+  processBtn.disabled = true;
+  ['resultsCard','reviewCard','downloadCard','progressWrap','errBar'].forEach(
+    id => document.getElementById(id).style.display = 'none');
+});
+
+quality.addEventListener('input', () => qualityVal.textContent = quality.value + '%');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault(); dropzone.classList.remove('dragover');
+  addFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value=''; });
+
+function addFiles(fileList){
+  const accepted = ['image/jpeg','image/png','image/webp','image/gif','image/bmp'];
+  for(const f of fileList){
+    if(!f.type.startsWith('image/') && !accepted.includes(f.type)) continue;
+    files.push(f);
+  }
+  countSpan.textContent = files.length;
+  processBtn.disabled = files.length === 0;
+}
+
+// ---------- helpers ----------
+function loadImage(file){
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload  = () => resolve({img, url});
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not decode image')); };
+    img.src = url;
+  });
+}
+
+function canvasToImage(canvas){
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = canvas.toDataURL('image/jpeg', 0.92);
+  });
+}
+
+// rotated copy of an image via canvas (1D barcodes only scan horizontally)
+async function rotated(img, deg){
+  const rad = deg * Math.PI / 180;
+  const swap = (deg % 180) !== 0;
+  const c = document.createElement('canvas');
+  c.width  = swap ? img.naturalHeight : img.naturalWidth;
+  c.height = swap ? img.naturalWidth  : img.naturalHeight;
+  const ctx = c.getContext('2d');
+  ctx.translate(c.width/2, c.height/2);
+  ctx.rotate(rad);
+  ctx.drawImage(img, -img.naturalWidth/2, -img.naturalHeight/2);
+  return canvasToImage(c);
+}
+
+async function zxingDecode(img){
+  if(!zxingReader) return null;
+  try{
+    const result = await zxingReader.decodeFromImageElement(img);
+    if(result && result.getText()){
+      const fmt = result.getBarcodeFormat !== undefined ? result.getBarcodeFormat() : null;
+      const kind = (fmt !== null && ZXing.BarcodeFormat)
+        ? (Object.keys(ZXing.BarcodeFormat).find(k => ZXing.BarcodeFormat[k] === fmt) || 'BARCODE')
+        : 'BARCODE';
+      return {text: result.getText(), kind};
+    }
+  }catch(e){}
+  return null;
+}
+
+async function scanCode(img){
+  // 1) fast path: jsQR on full-res pixels (handles any rotation)
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth; c.height = img.naturalHeight;
+  const ctx = c.getContext('2d', {willReadFrequently:true});
+  ctx.drawImage(img, 0, 0);
+  const data = ctx.getImageData(0, 0, c.width, c.height);
+  try {
+    const code = jsQR(data.data, data.width, data.height, {inversionAttempts:'dontInvert'});
+    if(code && code.data) return {text: code.data, kind: 'QR_CODE'};
+  } catch(e){}
+
+  if(!zxingReader) return null;
+
+  // 2) ZXing on the image as-is
+  let hit = await zxingDecode(img);
+  if(hit) return hit;
+
+  // 3) ZXing on 90° rotations — a sideways Code 128 is invisible to a 1D scanner.
+  //    Work on a ≤2000px copy: rotating a 12MP photo as PNG is far too slow.
+  let target = img;
+  if(img.naturalWidth > 2000){
+    try{
+      const cs = document.createElement('canvas');
+      const s = 2000 / img.naturalWidth;
+      cs.width = 2000; cs.height = Math.round(img.naturalHeight * s);
+      cs.getContext('2d').drawImage(img, 0, 0, cs.width, cs.height);
+      target = await canvasToImage(cs);
+    }catch(e){ target = img; }
+  }
+  for(const deg of [90, 180, 270]){
+    try{
+      hit = await zxingDecode(await rotated(target, deg));
+      if(hit) return hit;
+    }catch(e){}
+  }
+
+  // 4) last resort: a downscaled copy (binarization often works better ~1200px)
+  if(img.naturalWidth > 1600){
+    try{
+      const c2 = document.createElement('canvas');
+      const s = 1200 / img.naturalWidth;
+      c2.width = 1200; c2.height = Math.round(img.naturalHeight * s);
+      c2.getContext('2d').drawImage(img, 0, 0, c2.width, c2.height);
+      hit = await zxingDecode(await canvasToImage(c2));
+      if(hit) return hit;
+    }catch(e){}
+  }
+  return null;
+}
+
+function sanitize(name){
+  name = name.trim().replace(/\.(jpe?g|png|webp|gif|bmp)$/i, '');
+  name = name.replace(/[\\/:*?"<>|#%&{}$!@+'`=~\s]+/g, '_');
+  name = name.replace(/_{2,}/g, '_').replace(/^[_.]+|[_.]+$/g, '');
+  return name || 'unnamed';
+}
+
+function compressToJpeg(img, q, maxW){
+  let w = img.naturalWidth, h = img.naturalHeight;
+  if(w > maxW){ h = Math.round(h * maxW / w); w = maxW; }
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';                       // transparent → white for jpg
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  return new Promise(resolve => c.toBlob(resolve, 'image/jpeg', q));
+}
+
+function humanSize(bytes){
+  if(bytes < 1024) return bytes + ' B';
+  if(bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/1024/1024).toFixed(2) + ' MB';
+}
+
+function uniqueName(base){
+  let name = base, i = 2;
+  while(usedNames.has(name.toLowerCase())) name = `${base}_${i++}`;
+  usedNames.add(name.toLowerCase());
+  return name;
+}
+
+function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+function rowHtml(thumbUrl, original, newName, size, statusHtml){
+  const thumbCell = thumbUrl
+    ? `<img class="thumb" src="${thumbUrl}" alt="">`
+    : '';
+  return `
+    <td>${thumbCell}</td>
+    <td class="filename">${escapeHtml(original)}</td>
+    <td class="filename">${escapeHtml(newName)}</td>
+    <td>${escapeHtml(size)}</td>
+    <td>${statusHtml}</td>`;
+}
+
+// ---------- phase 1: scan ----------
+processBtn.addEventListener('click', async () => {
+  processBtn.disabled = true;
+  document.getElementById('resultsCard').style.display = 'block';
+  document.getElementById('reviewCard').style.display = 'none';
+  document.getElementById('downloadCard').style.display = 'none';
+  const tbody = document.getElementById('resultsBody');
+  tbody.innerHTML = '';
+  coded = []; review = []; zipBlob = null; usedNames = new Set();
+
+  const wrap = document.getElementById('progressWrap');
+  const bar  = document.getElementById('progressBar');
+  const txt  = document.getElementById('progressText');
+  wrap.style.display = 'block';
+
+  const q  = quality.value / 100;
+  const mw = parseInt(maxWidth.value) || 1920;
+  let done = 0, totalIn = 0, totalOut = 0;
+
+  for(const file of files){
+    txt.textContent = `Processing ${done+1}/${files.length}: ${file.name}`;
+    const row = document.createElement('tr');
+    row.innerHTML = `<td colspan="5" class="muted">⏳ ${file.name}…</td>`;
+    tbody.appendChild(row);
+
+    try{
+      const {img, url} = await loadImage(file);
+      const thumb = document.createElement('canvas');
+      thumb.width = 44; thumb.height = 44;
+      thumb.getContext('2d').drawImage(img, 0, 0, 44, 44);
+      const thumbUrl = thumb.toDataURL();
+
+      const code = await scanCode(img);
+
+      if(!code){
+        // → review queue. Keep the original object URL alive for the preview.
+        // This is more reliable than canvas.toDataURL() on Safari/iPadOS.
+        review.push({file, thumbUrl: url, origName: file.name});
+        row.innerHTML = rowHtml(thumbUrl, file.name, '—', '—',
+          '<span class="badge b-warn">no code → review</span>');
+        done++; bar.value = done/files.length*100; continue;
+      }
+
+      const finalName = uniqueName(sanitize(code.text));
+      const blob = await compressToJpeg(img, q, mw);
+      URL.revokeObjectURL(url);
+
+      coded.push({name: finalName + '.jpg', blob, origName: file.name});
+      totalIn += file.size; totalOut += blob.size;
+      row.innerHTML = rowHtml(thumbUrl, file.name, finalName + '.jpg',
+        `${humanSize(file.size)} → ${humanSize(blob.size)}`,
+        `<span class="badge b-ok">${escapeHtml(code.kind)} ✓</span>`);
+    }catch(err){
+      row.innerHTML = rowHtml('', file.name, '—', '—',
+        `<span class="badge b-err">error: ${err.message}</span>`);
+    }
+    done++; bar.value = done/files.length*100;
+  }
+
+  wrap.style.display = 'none';
+
+  if(coded.length){
+    document.getElementById('statsLine').textContent =
+      `${coded.length} auto-renamed — Input: ${humanSize(totalIn)} → Output: ${humanSize(totalOut)}` +
+      (totalIn ? ` (${Math.round((1-totalOut/totalIn)*100)}% smaller)` : '');
+  } else {
+    document.getElementById('resultsCard').style.display = 'none';
+  }
+
+  // review queue
+  if(review.length){
+    renderReview();
+  } else if(coded.length){
+    await buildZip();
+  } else {
+    alert('No codes detected in any photo, and nothing to review.');
+  }
+  processBtn.disabled = false;
+});
+
+// ---------- review queue ----------
+function renderReview(){
+  const card = document.getElementById('reviewCard');
+  card.style.display = 'block';
+  document.getElementById('reviewCount').textContent = review.length;
+  const list = document.getElementById('reviewList');
+  list.innerHTML = '';
+
+  review.forEach((item, idx) => {
+    const row = document.createElement('div');
+    row.className = 'review-row';
+    const suggested = sanitize(item.origName.replace(/\.[^.]+$/, ''));
+    row.innerHTML = `
+      <img class="thumb review-thumb" src="${item.thumbUrl}" data-idx="${idx}" alt="Preview ${escapeHtml(item.origName)}" title="Click to preview">
+      <div class="review-meta">
+        <div class="orig">${escapeHtml(item.origName)}</div>
+        <input class="name-input" value="${escapeHtml(suggested)}" data-idx="${idx}">
+      </div>
+      <label class="include-wrap"><input type="checkbox" class="include-cb" data-idx="${idx}" checked> include</label>`;
+    list.appendChild(row);
+  });
+  updatePendingCount();
+  card.scrollIntoView({behavior:'smooth', block:'start'});
+
+  list.querySelectorAll('.include-cb, .name-input').forEach(el =>
+    el.addEventListener('input', updatePendingCount));
+
+  list.querySelectorAll('.review-thumb').forEach(el =>
+    el.addEventListener('click', () => openPreview(Number(el.dataset.idx))));
+}
+
+function updatePendingCount(){
+  const selectedReview = document.querySelectorAll('.include-cb:checked').length;
+  const totalToExport = coded.length + selectedReview;
+  const pending = document.getElementById('pendingCount');
+  const btn = document.getElementById('finalizeBtn');
+  if(pending) pending.textContent = totalToExport;
+  if(btn) btn.disabled = totalToExport === 0;
+}
+
+
+
+let previewIndex = -1;
+
+function openPreview(idx){
+  const item = review[idx];
+  if(!item) return;
+  previewIndex = idx;
+  const modal = document.getElementById('previewModal');
+  const image = document.getElementById('previewImage');
+  const title = document.getElementById('previewTitle');
+  const modalName = document.getElementById('previewName');
+  const rowName = document.querySelector(`.name-input[data-idx="${idx}"]`);
+  if(!modal || !image || !title || !modalName) return;
+
+  image.src = item.thumbUrl;
+  title.textContent = item.origName;
+  modalName.value = rowName ? rowName.value : sanitize(item.origName.replace(/\.[^.]+$/, ''));
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden','false');
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => modalName.focus(), 0);
+}
+
+function syncPreviewName(){
+  if(previewIndex < 0) return;
+  const modalName = document.getElementById('previewName');
+  const rowName = document.querySelector(`.name-input[data-idx="${previewIndex}"]`);
+  if(modalName && rowName) rowName.value = modalName.value;
+}
+
+function closePreview(){
+  syncPreviewName();
+  const modal = document.getElementById('previewModal');
+  const image = document.getElementById('previewImage');
+  if(modal){
+    modal.classList.remove('open');
+    modal.setAttribute('aria-hidden','true');
+  }
+  if(image) image.removeAttribute('src');
+  previewIndex = -1;
+  document.body.style.overflow = '';
+}
+
+document.getElementById('previewName').addEventListener('input', syncPreviewName);
+document.getElementById('previewClose').addEventListener('click', closePreview);
+document.getElementById('previewModal').addEventListener('click', e => {
+  if(e.target.id === 'previewModal') closePreview();
+});
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape' && document.getElementById('previewModal').classList.contains('open')) closePreview();
+});
+
+// ---------- phase 2: finalize & zip ----------
+document.getElementById('finalizeBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('finalizeBtn');
+  btn.disabled = true;
+  const q  = quality.value / 100;
+  const mw = parseInt(maxWidth.value) || 1920;
+  const inputs = [...document.querySelectorAll('.name-input')];
+  const cbs    = [...document.querySelectorAll('.include-cb')];
+  let total = cbs.filter(cb => cb.checked).length;
+  let i = 0;
+
+  for(let k = 0; k < review.length; k++){
+    if(!cbs[k].checked){
+      if(review[k].thumbUrl){ URL.revokeObjectURL(review[k].thumbUrl); review[k].thumbUrl = ''; }
+      continue;
+    }
+    i++;
+    const finalizeText = document.getElementById('finalizeBtnText');
+    const finalizeSuffix = document.getElementById('finalizeSuffix');
+    if(finalizeText) finalizeText.textContent = `⏳ Compressing reviewed photo ${i}/${total}…`;
+    if(finalizeSuffix) finalizeSuffix.textContent = ' selected';
+    const item = review[k];
+    try{
+      const {img, url} = await loadImage(item.file);
+      const base = sanitize(inputs[k].value) || sanitize(item.origName.replace(/\.[^.]+$/, ''));
+      const finalName = uniqueName(base);
+      const blob = await compressToJpeg(img, q, mw);
+      URL.revokeObjectURL(url);
+      coded.push({name: finalName + '.jpg', blob, origName: item.origName});
+      if(item.thumbUrl){ URL.revokeObjectURL(item.thumbUrl); item.thumbUrl = ''; }
+    }catch(err){
+      if(item.thumbUrl){ URL.revokeObjectURL(item.thumbUrl); item.thumbUrl = ''; }
+      alert(`Failed to process ${item.origName}: ${err.message}`);
+    }
+  }
+  await buildZip();
+  const finalizeText = document.getElementById('finalizeBtnText');
+  const finalizeSuffix = document.getElementById('finalizeSuffix');
+  if(finalizeText) finalizeText.textContent = '✅ Build & Download ZIP';
+  if(finalizeSuffix) finalizeSuffix.textContent = ' to export';
+  document.getElementById('reviewCard').style.display = 'none';
+});
+
+async function buildZip(){
+  if(!coded.length) return;
+  const zip = new JSZip();
+  for(const r of coded) zip.file(r.name, r.blob);
+  zipBlob = await zip.generateAsync({type:'blob', compression:'STORE'});
+  document.getElementById('zipSize').textContent = humanSize(zipBlob.size);
+  document.getElementById('zipSummary').textContent =
+    `${coded.length} file(s) — names: ` + coded.slice(0,3).map(r=>r.name).join(', ') +
+    (coded.length > 3 ? '…' : '');
+  document.getElementById('downloadCard').style.display = 'block';
+  document.getElementById('downloadCard').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+document.getElementById('downloadBtn').addEventListener('click', () => {
+  if(!zipBlob) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(zipBlob);
+  a.download = 'renamed-photos.zip';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+});
+</script>
+</body>
+</html>
